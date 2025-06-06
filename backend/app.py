@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import os
 import json
 from flask_cors import CORS
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,6 +18,11 @@ clustering_summary_cache = ""
 app = Flask(__name__)
 CORS(app)
 
+openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=openrouter_api_key,
+)
 
 UPLOAD_FOLDER = './uploads'
 RESULT_FOLDER = './results'
@@ -26,9 +32,6 @@ unique_id = str(uuid.uuid4())
 img_path = os.path.join(RESULT_FOLDER, f'cluster_plot_{unique_id}.png')
 result_csv_path = os.path.join(RESULT_FOLDER, f'clustered_data_{unique_id}.csv')
 
-# API KEY jika dibutuhkan
-api_key = os.getenv("HUGGINGFACE_API_KEY")
-OLLAMA_API_URL = "http://localhost:11434/api/generate"  # Pastikan Ollama aktif
 
 def clean_and_fill_mean(df):
     for col in df.columns:
@@ -89,32 +92,20 @@ def generate_summary(df, feature_cols, algorithm, n_clusters):
                     summary += f"  • {col}: [bukan numerik]\n"
     return summary
 
-def query_ollama(prompt):
-    payload = {
-        "model": "mistral",  # Pastikan llama3 sudah di-pull melalui `ollama pull llama3`
-        "prompt": prompt,
-        "max_tokens": 200,
-        "temperature": 0.7,
-        "stream": True
-    }
-
+def query_openrouter(prompt):
     try:
-        response = requests.post(OLLAMA_API_URL, json=payload, stream=True)
-        response.raise_for_status()
-
-        full_response = ""
-        for line in response.iter_lines():
-            if line:
-                try:
-                    data = json.loads(line.decode('utf-8'))
-                    full_response += data.get("response", "")
-                except json.JSONDecodeError:
-                    continue
-
-        return full_response if full_response else "Tidak ada respon dari Ollama."
-
+        response = client.chat.completions.create(
+            model="openai/gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        return f"Gagal mengakses Ollama: {str(e)}"
+        return f"Gagal mengakses OpenRouter: {str(e)}"
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -135,7 +126,7 @@ def chat():
     AI: Jawab berdasarkan hasil clustering di atas secara ringkas dan jelas.
     """
 
-    ai_reply = query_ollama(prompt)
+    ai_reply = query_openrouter(prompt)
     return jsonify({'reply': ai_reply})
 
 @app.route('/upload', methods=['POST'])
@@ -244,6 +235,5 @@ def clustering_summary():
         return jsonify({'error': str(e)}), 400
 
 if __name__ == '__main__':
-    app.run(debug=True)
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
